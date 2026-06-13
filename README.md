@@ -1,36 +1,93 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Cássio Freitas Carús — Landing Page
 
-## Getting Started
+Landing page pessoal premium com jornada 3D controlada pelo scroll:
+**gabinete → placa-mãe → chip → partículas de dados → galáxia digital.**
 
-First, run the development server:
+## Como rodar localmente
 
 ```bash
+npm install
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Abra [http://localhost:3000](http://localhost:3000).
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+Para gerar a versão de produção:
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+```bash
+npm run build
+npm start
+```
 
-## Learn More
+## Stack
 
-To learn more about Next.js, take a look at the following resources:
+| Biblioteca | Uso |
+| --- | --- |
+| Next.js 16 (App Router) + React 19 + TypeScript | Base do projeto |
+| Tailwind CSS v4 | Estilos (tokens em `app/globals.css`) |
+| Three.js + React Three Fiber | Cena 3D da jornada de scroll |
+| framer-motion | Animações de interface (reveal, acordeão, hero) |
+| Lenis | Smooth scroll |
+| lucide-react | Ícones SVG minimalistas |
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+## Onde editar cada coisa
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+### Textos, serviços, FAQ, projetos
+Tudo está centralizado em **`content/site.ts`** — nenhum texto fica solto
+dentro dos componentes. Edite ali e o site inteiro atualiza.
 
-## Deploy on Vercel
+### WhatsApp e e-mail
+No topo de `content/site.ts`:
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+```ts
+whatsappNumber: "5500000000000", // ← troque pelo seu número (DDI+DDD, só dígitos)
+email: "cfcarus@hotmail.com",
+```
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+### Cores e fontes
+Os tokens estão em `app/globals.css` no bloco `@theme`:
+
+- `--color-ink` — fundo profundo
+- `--color-frost` / `--color-steel` — textos
+- `--color-azure` / `--color-volt` — azul elétrico / ciano
+- `--color-gilt` / `--color-silver` — dourado discreto / prata
+
+As fontes (Space Grotesk + Inter) são configuradas em `app/layout.tsx`.
+
+### SEO
+Title, description e Open Graph ficam em `app/layout.tsx`.
+Após o deploy, atualize `site.url` em `content/site.ts`.
+
+### Cena 3D
+- `components/three/CameraRig.tsx` — keyframes da câmera (o "roteiro" do filme)
+- `components/three/stages/` — cada estágio da jornada (gabinete, placa-mãe, chip, partículas, galáxia)
+- `lib/journey.ts` — progresso do scroll compartilhado com a cena
+
+A cena tem **fallback automático**: sem WebGL (ou com
+`prefers-reduced-motion`), o fundo vira gradientes elegantes em CSS.
+No mobile, as contagens de partículas são reduzidas automaticamente.
+
+## Publicar na Vercel
+
+1. Suba o projeto para um repositório no GitHub.
+2. Em [vercel.com/new](https://vercel.com/new), importe o repositório.
+3. A Vercel detecta Next.js automaticamente — apenas confirme o deploy.
+
+Ou via CLI:
+
+```bash
+npm i -g vercel
+vercel          # deploy de preview
+vercel --prod   # deploy de produção
+```
+
+## O que ainda pode ser melhorado
+
+- **Formulário com backend**: hoje o envio abre o WhatsApp com a mensagem
+  preenchida. Dá para integrar um endpoint (Resend, Formspree ou API Route).
+- **Imagem Open Graph**: criar uma imagem `opengraph-image.png` em `app/`.
+- **Favicon personalizado**: substituir `app/favicon.ico`.
+- **Analytics**: adicionar `@vercel/analytics` ou GA4.
+- **Modelos 3D mais ricos**: o gabinete/placa-mãe são procedurais; um modelo
+  GLTF dedicado deixaria a cena ainda mais realista.
+- **Galeria de projetos reais** conforme os trabalhos forem entregues.
