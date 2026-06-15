@@ -2,6 +2,7 @@
 
 import { Canvas } from "@react-three/fiber";
 import { useEffect, useState } from "react";
+import * as THREE from "three";
 import { measureJourney } from "@/lib/journey";
 import { CameraRig } from "./CameraRig";
 import { SceneEnvironment } from "./Environment";
@@ -33,6 +34,8 @@ export default function JourneyCanvas() {
         antialias: true,
         alpha: true,
         powerPreference: "high-performance",
+        toneMapping: THREE.ACESFilmicToneMapping,
+        toneMappingExposure: 1.15,
       }}
       style={{ background: "transparent" }}
     >

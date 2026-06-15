@@ -1,479 +1,249 @@
 "use client";
 
 import { useFrame } from "@react-three/fiber";
-import { useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import * as THREE from "three";
+import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import { journeyState } from "@/lib/journey";
 import { seededRandom, stageFade } from "@/lib/math";
-import {
-  brushedMetalNormalMap,
-  brushedMetalRoughnessMap,
-  brushedMetalTexture,
-  pcbTexture,
-  softCircleTexture,
-  ventMeshTexture,
-} from "../textures";
+import { softCircleTexture } from "../textures";
 
 /**
- * Estágio 1 — gabinete gamer premium: estrutura preta fosca,
- * vidro temperado na frente e na lateral, interior visível com
- * fans RGB, water cooler, GPU e RAM iluminadas.
- * Some conforme a câmera atravessa o vidro frontal (p ≈ 0.18 → 0.30).
- *
- * Dimensões: 1.15 (x) × 2.1 (y) × 2.0 (z), centrado na origem.
- * Vidro: frente (+z) e lateral direita (+x). Placa-mãe na parede -x.
+ * Lightmap procedural: simula AO nos cantos e bounce-light ciano
+ * dos LEDs RGB do interior. Aplicado apenas em meshes com UV1/UV2.
  */
+function buildLightMap(): THREE.Texture {
+  const S = 512;
+  const canvas = document.createElement("canvas");
+  canvas.width = S;
+  canvas.height = S;
+  const ctx = canvas.getContext("2d")!;
 
-const VOLT = 0x35e0ff;
+  ctx.fillStyle = "#c2cdd6";
+  ctx.fillRect(0, 0, S, S);
 
-type FadeMat = THREE.Material & { opacity: number };
+  // AO suave nos cantos
+  for (const [cx, cy] of [
+    [0, 0], [S, 0], [0, S], [S, S],
+  ] as [number, number][]) {
+    const g = ctx.createRadialGradient(cx, cy, 0, cx, cy, S * 0.65);
+    g.addColorStop(0, "rgba(0,0,0,0.44)");
+    g.addColorStop(1, "rgba(0,0,0,0)");
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, S, S);
+  }
 
-function makeTubeGeometry(points: [number, number, number][]) {
-  const curve = new THREE.CatmullRomCurve3(
-    points.map(([x, y, z]) => new THREE.Vector3(x, y, z)),
+  // Bounce ciano dos fans / RGB no interior
+  const bounce = ctx.createRadialGradient(
+    S * 0.5, S * 0.3, 0,
+    S * 0.5, S * 0.3, S * 0.48,
   );
-  return new THREE.TubeGeometry(curve, 24, 0.018, 8);
+  bounce.addColorStop(0, "rgba(53,224,255,0.24)");
+  bounce.addColorStop(1, "rgba(0,0,0,0)");
+  ctx.fillStyle = bounce;
+  ctx.fillRect(0, 0, S, S);
+
+  const t = new THREE.CanvasTexture(canvas);
+  t.colorSpace = THREE.SRGBColorSpace;
+  return t;
 }
 
 export function ComputerCase({ quality }: { quality: "high" | "low" }) {
-  const group = useRef<THREE.Group>(null);
-  const dust = useRef<THREE.Points>(null);
-  const bladeRefs = useRef<(THREE.Group | null)[]>([]);
+  const groupRef   = useRef<THREE.Group>(null);
   const innerLight = useRef<THREE.PointLight>(null);
+  const dustRef    = useRef<THREE.Points>(null);
 
-  const assets = useMemo(() => {
-    const brushed = brushedMetalTexture();
-    const normalMap = brushedMetalNormalMap();
-    const roughnessMap = brushedMetalRoughnessMap();
+  const [gltfScene, setGltfScene] = useState<THREE.Group | null>(null);
 
-    // ── Materiais (MeshPhysicalMaterial com normal map + clearcoat) ──────
-    const frameMat = new THREE.MeshPhysicalMaterial({
-      color: 0x0c1118,
-      map: brushed,
-      normalMap,
-      normalScale: new THREE.Vector2(0.65, 0.65),
-      roughnessMap,
-      metalness: 0.92,
-      roughness: 0.42,
-      envMapIntensity: 1.5,
-      clearcoat: 0.3,
-      clearcoatRoughness: 0.1,
-      transparent: true,
-    });
-    const baseMat = new THREE.MeshPhysicalMaterial({
-      color: 0x090e15,
-      map: brushed,
-      normalMap,
-      normalScale: new THREE.Vector2(0.55, 0.55),
-      roughnessMap,
-      metalness: 0.88,
-      roughness: 0.48,
-      envMapIntensity: 1.3,
-      clearcoat: 0.2,
-      clearcoatRoughness: 0.15,
-      transparent: true,
-    });
-    const ventMat = new THREE.MeshPhysicalMaterial({
-      color: 0x161e28,
-      map: ventMeshTexture(),
-      normalMap,
-      normalScale: new THREE.Vector2(0.4, 0.4),
-      metalness: 0.75,
-      roughness: 0.52,
-      envMapIntensity: 1.0,
-      clearcoat: 0.15,
-      clearcoatRoughness: 0.2,
-      transparent: true,
-    });
-    // Vidro temperado com transmissão física real (não opacity: 0.3)
-    const glassMat = new THREE.MeshPhysicalMaterial({
-      color: 0x080e16,
-      transmission: 0.88,
-      ior: 1.52,
-      thickness: 0.1,
-      roughness: 0.03,
-      metalness: 0,
-      envMapIntensity: 3.2,
-      clearcoat: 1.0,
-      clearcoatRoughness: 0.03,
-      transparent: true,
-      depthWrite: false,
-    });
-    const trayMat = new THREE.MeshPhysicalMaterial({
-      color: 0x3a4d62,
-      map: pcbTexture(),
-      metalness: 0.45,
-      roughness: 0.55,
-      envMapIntensity: 0.8,
-      transparent: true,
-    });
-    const darkPartMat = new THREE.MeshPhysicalMaterial({
-      color: 0x0e1520,
-      normalMap,
-      normalScale: new THREE.Vector2(0.3, 0.3),
-      metalness: 0.78,
-      roughness: 0.36,
-      envMapIntensity: 1.1,
-      clearcoat: 0.45,
-      clearcoatRoughness: 0.12,
-      transparent: true,
-    });
-    const bladeMat = new THREE.MeshPhysicalMaterial({
-      color: 0x18202c,
-      normalMap,
-      normalScale: new THREE.Vector2(0.25, 0.25),
-      metalness: 0.6,
-      roughness: 0.44,
-      envMapIntensity: 0.9,
-      clearcoat: 0.3,
-      clearcoatRoughness: 0.2,
-      transparent: true,
-    });
-    const glowMat = new THREE.MeshBasicMaterial({
-      color: VOLT,
-      toneMapped: false,
-      transparent: true,
-    });
-    const haloMat = new THREE.MeshBasicMaterial({
-      map: softCircleTexture(),
-      color: VOLT,
-      transparent: true,
-      opacity: 0.3,
-      blending: THREE.AdditiveBlending,
-      depthWrite: false,
-    });
-    const silverMat = new THREE.MeshPhysicalMaterial({
-      color: 0xb0bece,
-      metalness: 0.96,
-      roughness: 0.22,
-      envMapIntensity: 2.0,
-      clearcoat: 0.6,
-      clearcoatRoughness: 0.08,
-      transparent: true,
-    });
-    const floorGlowMat = new THREE.MeshBasicMaterial({
-      map: softCircleTexture(),
-      color: 0x2e6fff,
-      transparent: true,
-      opacity: 0.3,
-      blending: THREE.AdditiveBlending,
-      depthWrite: false,
-    });
+  // Refs para animação de fade (evita closures desatualizadas no useFrame)
+  const glbMatsRef  = useRef<THREE.Material[]>([]);
+  const dustMatRef  = useRef<THREE.PointsMaterial | null>(null);
+  const floorMatRef = useRef<THREE.MeshBasicMaterial | null>(null);
+  // Ref paralela com opacidade base de cada material do GLB
+  const glbBaseOpRef = useRef<number[]>([]);
+  const gltfSceneRef = useRef<THREE.Group | null>(null);
 
-    // ── Geometrias reutilizadas ───────────────────────────────
-    const fanBorderH = new THREE.BoxGeometry(0.5, 0.05, 0.09);
-    const fanBorderV = new THREE.BoxGeometry(0.05, 0.4, 0.09);
-    const bladeGeom = new THREE.BoxGeometry(0.04, 0.17, 0.014);
-    const hubGeom = new THREE.CylinderGeometry(0.07, 0.07, 0.06, 16);
-    hubGeom.rotateX(Math.PI / 2);
-    const ringGeom = new THREE.TorusGeometry(0.2, 0.013, 12, 40);
-    const pumpRingGeom = new THREE.TorusGeometry(0.13, 0.014, 12, 36);
-    const shroudRingGeom = new THREE.TorusGeometry(0.16, 0.012, 12, 36);
-    const planeGeom = new THREE.PlaneGeometry(1, 1);
-    const ioDotGeom = new THREE.CylinderGeometry(0.012, 0.012, 0.015, 10);
-    ioDotGeom.rotateX(Math.PI / 2);
-
-    const tube1 = makeTubeGeometry([
-      [-0.38, 0.5, 0.12],
-      [-0.28, 0.72, 0.02],
-      [-0.22, 0.88, -0.22],
-      [-0.22, 0.9, -0.42],
-    ]);
-    const tube2 = makeTubeGeometry([
-      [-0.38, 0.42, 0.18],
-      [-0.25, 0.66, 0.12],
-      [-0.18, 0.86, -0.12],
-      [-0.18, 0.9, -0.35],
-    ]);
-
-    // Poeira luminosa ao redor do gabinete
-    const dustCount = quality === "high" ? 220 : 90;
-    const rng = seededRandom(11);
-    const positions = new Float32Array(dustCount * 3);
-    for (let i = 0; i < dustCount; i++) {
-      const radius = 2.2 + rng() * 4.5;
-      const theta = rng() * Math.PI * 2;
-      positions[i * 3] = Math.cos(theta) * radius;
-      positions[i * 3 + 1] = (rng() - 0.5) * 4.5;
-      positions[i * 3 + 2] = Math.sin(theta) * radius;
+  // Partículas de poeira + brilho sob o gabinete
+  const { dustGeom, dustMat, floorMat } = useMemo(() => {
+    const rng   = seededRandom(11);
+    const count = quality === "high" ? 220 : 90;
+    const pos   = new Float32Array(count * 3);
+    for (let i = 0; i < count; i++) {
+      const r = 2.2 + rng() * 4.5;
+      const a = rng() * Math.PI * 2;
+      pos[i * 3]     = Math.cos(a) * r;
+      pos[i * 3 + 1] = (rng() - 0.5) * 4.5;
+      pos[i * 3 + 2] = Math.sin(a) * r;
     }
-    const dustGeom = new THREE.BufferGeometry();
-    dustGeom.setAttribute("position", new THREE.BufferAttribute(positions, 3));
-    const dustMat = new THREE.PointsMaterial({
-      map: softCircleTexture(),
-      color: 0x9fc6ff,
-      size: 0.045,
-      sizeAttenuation: true,
-      transparent: true,
-      opacity: 0.45,
-      blending: THREE.AdditiveBlending,
-      depthWrite: false,
+    const geom = new THREE.BufferGeometry();
+    geom.setAttribute("position", new THREE.BufferAttribute(pos, 3));
+
+    const circle = softCircleTexture();
+    const dm = new THREE.PointsMaterial({
+      map: circle, color: 0x9fc6ff, size: 0.045,
+      sizeAttenuation: true, transparent: true, opacity: 0.45,
+      blending: THREE.AdditiveBlending, depthWrite: false,
     });
-
-    // Opacidade-base de cada material (para o fade da jornada)
-    // glassMat usa transmission física agora — base 1.0 (opacity=1 + transmission=0.88 = vidro real)
-    const fadeMats: [FadeMat, number][] = [
-      [frameMat, 1],
-      [baseMat, 1],
-      [ventMat, 1],
-      [glassMat, 1],
-      [trayMat, 1],
-      [darkPartMat, 1],
-      [bladeMat, 1],
-      [glowMat, 1],
-      [haloMat, 0.3],
-      [silverMat, 1],
-      [floorGlowMat, 0.3],
-      [dustMat, 0.45],
-    ];
-
-    return {
-      frameMat, baseMat, ventMat, glassMat, trayMat, darkPartMat,
-      bladeMat, glowMat, haloMat, silverMat, floorGlowMat,
-      fanBorderH, fanBorderV, bladeGeom, hubGeom, ringGeom, pumpRingGeom,
-      shroudRingGeom, planeGeom, ioDotGeom, tube1, tube2,
-      dustGeom, dustMat, fadeMats,
-    };
+    const fm = new THREE.MeshBasicMaterial({
+      map: circle, color: 0x2e6fff, transparent: true, opacity: 0.30,
+      blending: THREE.AdditiveBlending, depthWrite: false,
+    });
+    return { dustGeom: geom, dustMat: dm, floorMat: fm };
   }, [quality]);
 
-  useFrame((state, delta) => {
-    const p = journeyState.smoothProgress;
-    const fade = stageFade(p, -1, 0, 0.18, 0.3);
+  useEffect(() => {
+    dustMatRef.current  = dustMat;
+    floorMatRef.current = floorMat;
+  }, [dustMat, floorMat]);
 
-    if (group.current) group.current.visible = fade > 0.01;
-    if (!group.current?.visible) return;
+  // Carrega o modelo GLB com materiais PBR + lightmap
+  useEffect(() => {
+    const lightMap = buildLightMap();
+    const loader   = new GLTFLoader();
 
-    const pulse = 0.82 + Math.sin(state.clock.elapsedTime * 1.8) * 0.18;
-    for (const [mat, base] of assets.fadeMats) {
-      mat.opacity = fade * base;
+    loader.load(
+      "/gabinete.glb",
+      (gltf) => {
+        const root = gltf.scene;
+        gltfSceneRef.current = root;
+
+        // ── Auto-fit: escala e centra o modelo independente de como foi exportado ──
+        // Mede o bounding box real do GLB
+        const box    = new THREE.Box3().setFromObject(root);
+        const size   = box.getSize(new THREE.Vector3());
+        const center = box.getCenter(new THREE.Vector3());
+
+        // Escala para que a altura corresponda ao gabinete procedural (~2.1 u)
+        const TARGET_HEIGHT = 2.1;
+        const sf = TARGET_HEIGHT / Math.max(size.y, 0.001);
+        root.scale.setScalar(sf);
+
+        // Centra na origem (compensando a escala)
+        root.position.set(
+          -center.x * sf,
+          -center.y * sf,
+          -center.z * sf,
+        );
+
+        console.info(
+          `[ComputerCase] GLB ${size.x.toFixed(2)}×${size.y.toFixed(2)}×${size.z.toFixed(2)} → scale ${sf.toFixed(4)}`,
+        );
+
+        const seen    = new Set<THREE.Material>();
+        const mats:   THREE.Material[] = [];
+        const bases:  number[]         = [];
+
+        root.traverse((node) => {
+          if (!(node instanceof THREE.Mesh)) return;
+
+          node.castShadow    = true;
+          node.receiveShadow = true;
+
+          const nodeMats: THREE.Material[] = Array.isArray(node.material)
+            ? node.material
+            : [node.material];
+
+          // glTF 2.0: TEXCOORD_1 aparece como "uv1" no Three.js r136+
+          const hasSecondUV =
+            !!node.geometry.attributes.uv1 ||
+            !!node.geometry.attributes.uv2;
+
+          for (const m of nodeMats) {
+            if (seen.has(m)) continue;
+            seen.add(m);
+
+            if (
+              m instanceof THREE.MeshStandardMaterial ||
+              m instanceof THREE.MeshPhysicalMaterial
+            ) {
+              // Potencializa reflexos do environment map
+              m.envMapIntensity = 2.4;
+
+              // Lightmap baked (AO + bounce) se o mesh tem UV2
+              if (hasSecondUV) {
+                m.lightMap          = lightMap;
+                m.lightMapIntensity = 1.6;
+              }
+              m.needsUpdate = true;
+            }
+
+            // Transparência para o fade de scroll
+            m.transparent = true;
+            mats.push(m);
+            bases.push((m as THREE.MeshStandardMaterial).opacity ?? 1);
+          }
+        });
+
+        glbMatsRef.current   = mats;
+        glbBaseOpRef.current = bases;
+        setGltfScene(root);
+      },
+      undefined,
+      (err) => console.warn("[ComputerCase] gabinete.glb:", err),
+    );
+
+    return () => {
+      lightMap.dispose();
+      glbMatsRef.current   = [];
+      glbBaseOpRef.current = [];
+
+      const root = gltfSceneRef.current;
+      if (root) {
+        root.traverse((node) => {
+          if (!(node instanceof THREE.Mesh)) return;
+          node.geometry.dispose();
+          const ms = Array.isArray(node.material) ? node.material : [node.material];
+          ms.forEach((m) => m.dispose());
+        });
+      }
+    };
+  }, []);
+
+  useFrame((_, delta) => {
+    const fade = stageFade(journeyState.smoothProgress, -1, 0, 0.18, 0.3);
+
+    if (groupRef.current) groupRef.current.visible = fade > 0.01;
+    if (!groupRef.current?.visible) return;
+
+    // Fade materiais do GLB respeitando a opacidade original de cada um
+    const mats  = glbMatsRef.current;
+    const bases = glbBaseOpRef.current;
+    for (let i = 0; i < mats.length; i++) {
+      (mats[i] as THREE.MeshStandardMaterial).opacity = fade * (bases[i] ?? 1);
     }
-    assets.glowMat.opacity = fade * pulse;
-    assets.haloMat.opacity = fade * 0.3 * pulse;
 
-    if (innerLight.current) innerLight.current.intensity = fade * 10;
-
-    // Fans girando
-    bladeRefs.current.forEach((blades, i) => {
-      if (blades) blades.rotation.z += delta * (5.5 + i * 1.2);
-    });
-
-    if (dust.current) dust.current.rotation.y += delta * 0.02;
+    if (dustMatRef.current)  dustMatRef.current.opacity  = fade * 0.45;
+    if (floorMatRef.current) floorMatRef.current.opacity = fade * 0.30;
+    if (innerLight.current)  innerLight.current.intensity = fade * 10;
+    if (dustRef.current)     dustRef.current.rotation.y  += delta * 0.02;
   });
 
-  // Fan RGB completo (moldura, 7 pás, hub, anel de LED e halo)
-  const fan = (position: [number, number, number], index: number) => (
-    <group key={index} position={position}>
-      {/* Moldura vazada do fan */}
-      <mesh geometry={assets.fanBorderH} material={assets.darkPartMat} position={[0, 0.225, 0]} />
-      <mesh geometry={assets.fanBorderH} material={assets.darkPartMat} position={[0, -0.225, 0]} />
-      <mesh geometry={assets.fanBorderV} material={assets.darkPartMat} position={[-0.225, 0, 0]} />
-      <mesh geometry={assets.fanBorderV} material={assets.darkPartMat} position={[0.225, 0, 0]} />
-      <group
-        position={[0, 0, 0.03]}
-        ref={(el) => {
-          bladeRefs.current[index] = el;
-        }}
-      >
-        {Array.from({ length: 7 }, (_, b) => (
-          <group key={b} rotation={[0, 0, (b / 7) * Math.PI * 2]}>
-            <mesh
-              geometry={assets.bladeGeom}
-              material={assets.bladeMat}
-              position={[0, 0.11, 0]}
-              rotation={[0, 0.55, 0]}
-            />
-          </group>
-        ))}
-      </group>
-      <mesh geometry={assets.hubGeom} material={assets.darkPartMat} position={[0, 0, 0.03]} />
-      <mesh geometry={assets.ringGeom} material={assets.glowMat} position={[0, 0, 0.048]} />
-      <mesh
-        geometry={assets.planeGeom}
-        material={assets.haloMat}
-        position={[0, 0, 0.07]}
-        scale={[0.85, 0.85, 1]}
-      />
-    </group>
-  );
-
   return (
-    <group ref={group}>
-      {/* ── Base / shroud da fonte (terço inferior sólido) ── */}
-      <mesh material={assets.baseMat} position={[0, -0.75, 0]}>
-        <boxGeometry args={[1.15, 0.6, 2.0]} />
-      </mesh>
+    <group ref={groupRef}>
+      {gltfScene && <primitive object={gltfScene} />}
 
-      {/* I/O frontal na base */}
-      {[-0.18, -0.1, -0.02, 0.06].map((x, i) => (
-        <mesh
-          key={i}
-          geometry={assets.ioDotGeom}
-          material={assets.silverMat}
-          position={[x, -0.52, 1.005]}
-        />
-      ))}
-      {/* Botão de energia com anel aceso */}
-      <mesh position={[0.22, -0.52, 1.005]} material={assets.glowMat}>
-        <torusGeometry args={[0.022, 0.005, 8, 24]} />
-      </mesh>
-
-      {/* ── Estrutura superior ── */}
-      {/* Teto com malha de ventilação */}
-      <mesh material={assets.ventMat} position={[0, 1.02, 0]}>
-        <boxGeometry args={[1.15, 0.06, 2.0]} />
-      </mesh>
-      {/* Traseira ventilada */}
-      <mesh material={assets.ventMat} position={[0, 0.3, -0.985]}>
-        <boxGeometry args={[1.15, 1.5, 0.04]} />
-      </mesh>
-      {/* Parede esquerda (tray da placa-mãe, vista por fora) */}
-      <mesh material={assets.frameMat} position={[-0.565, 0.3, 0]}>
-        <boxGeometry args={[0.03, 1.5, 2.0]} />
-      </mesh>
-      {/* Pilares do vidro */}
-      {(
-        [
-          [0.555, 0.975],
-          [-0.555, 0.975],
-          [0.555, -0.975],
-        ] as const
-      ).map(([px, pz], i) => (
-        <mesh key={i} material={assets.frameMat} position={[px, 0.3, pz]}>
-          <boxGeometry args={[0.045, 1.5, 0.045]} />
-        </mesh>
-      ))}
-      {/* Rodapé do vidro (transição para a base) */}
-      <mesh material={assets.frameMat} position={[0, -0.43, 0]}>
-        <boxGeometry args={[1.15, 0.05, 2.0]} />
-      </mesh>
-
-      {/* ── Vidro temperado (frente e lateral direita) ── */}
-      <mesh
-        geometry={assets.planeGeom}
-        material={assets.glassMat}
-        position={[0, 0.3, 0.992]}
-        scale={[1.06, 1.44, 1]}
-      />
-      <mesh
-        geometry={assets.planeGeom}
-        material={assets.glassMat}
-        position={[0.572, 0.3, 0]}
-        rotation={[0, Math.PI / 2, 0]}
-        scale={[1.93, 1.44, 1]}
-      />
-
-      {/* ── Interior ── */}
-      {/* Tray da placa-mãe (parede -x, virado para dentro) */}
-      <mesh
-        geometry={assets.planeGeom}
-        material={assets.trayMat}
-        position={[-0.545, 0.3, -0.05]}
-        rotation={[0, Math.PI / 2, 0]}
-        scale={[1.8, 1.42, 1]}
-      />
-
-      {/* Fans frontais com anel RGB */}
-      {fan([0, 0.55, 0.82], 0)}
-      {fan([0, 0.02, 0.82], 1)}
-
-      {/* Water cooler: pump na placa + mangueiras + radiador no teto */}
-      <group position={[-0.48, 0.45, 0.05]} rotation={[0, 0, -Math.PI / 2]}>
-        <mesh material={assets.darkPartMat}>
-          <cylinderGeometry args={[0.14, 0.14, 0.1, 24]} />
-        </mesh>
-        <mesh
-          geometry={assets.pumpRingGeom}
-          material={assets.glowMat}
-          rotation={[Math.PI / 2, 0, 0]}
-          position={[0, 0.055, 0]}
-        />
-        <mesh
-          geometry={assets.planeGeom}
-          material={assets.haloMat}
-          rotation={[-Math.PI / 2, 0, 0]}
-          position={[0, 0.08, 0]}
-          scale={[0.5, 0.5, 1]}
-        />
-      </group>
-      <mesh geometry={assets.tube1} material={assets.darkPartMat} />
-      <mesh geometry={assets.tube2} material={assets.darkPartMat} />
-      {/* Radiador no teto */}
-      <mesh material={assets.darkPartMat} position={[-0.2, 0.93, -0.15]}>
-        <boxGeometry args={[0.24, 0.08, 1.0]} />
-      </mesh>
-
-      {/* GPU com friso de LED */}
-      <mesh material={assets.darkPartMat} position={[-0.2, -0.05, 0.15]}>
-        <boxGeometry args={[0.45, 0.14, 0.95]} />
-      </mesh>
-      <mesh material={assets.glowMat} position={[-0.2, 0.024, 0.6]}>
-        <boxGeometry args={[0.42, 0.012, 0.02]} />
-      </mesh>
-
-      {/* Pentes de RAM com topo iluminado */}
-      {[0, 1, 2, 3].map((i) => (
-        <group key={i} position={[-0.46, 0.45, -0.28 - i * 0.07]}>
-          <mesh material={assets.darkPartMat}>
-            <boxGeometry args={[0.14, 0.55, 0.026]} />
-          </mesh>
-          <mesh material={assets.glowMat} position={[0.075, 0, 0]}>
-            <boxGeometry args={[0.012, 0.55, 0.02]} />
-          </mesh>
-        </group>
-      ))}
-
-      {/* Anéis de luz no topo do shroud */}
-      {[0.35, -0.25].map((z, i) => (
-        <group key={i} position={[0.05, -0.443, z]}>
-          <mesh
-            geometry={assets.shroudRingGeom}
-            material={assets.glowMat}
-            rotation={[Math.PI / 2, 0, 0]}
-          />
-          <mesh
-            geometry={assets.planeGeom}
-            material={assets.haloMat}
-            rotation={[-Math.PI / 2, 0, 0]}
-            position={[0, 0.03, 0]}
-            scale={[0.6, 0.6, 1]}
-          />
-        </group>
-      ))}
-
-      {/* Luz interna ciano que vaza pelo vidro */}
+      {/* Luz interna ciano que simula o glow RGB */}
       <pointLight
         ref={innerLight}
-        position={[0.05, 0.25, 0.3]}
-        color={VOLT}
+        position={[0, 0.25, 0.3]}
+        color={0x35e0ff}
         intensity={6}
         distance={3.2}
         decay={2}
       />
 
-      {/* Pés */}
-      {(
-        [
-          [-0.42, 0.8],
-          [0.42, 0.8],
-          [-0.42, -0.8],
-          [0.42, -0.8],
-        ] as const
-      ).map(([fx, fz], i) => (
-        <mesh key={i} material={assets.baseMat} position={[fx, -1.085, fz]}>
-          <boxGeometry args={[0.2, 0.07, 0.2]} />
-        </mesh>
-      ))}
-
-      {/* Brilho suave sob o gabinete */}
+      {/* Brilho azul sob o gabinete */}
       <mesh
-        geometry={assets.planeGeom}
-        material={assets.floorGlowMat}
-        position={[0, -1.12, 0]}
         rotation={[-Math.PI / 2, 0, 0]}
-        scale={[4.4, 4.4, 1]}
-      />
+        position={[0, -1.12, 0]}
+        scale={4.4}
+        material={floorMat}
+      >
+        <planeGeometry />
+      </mesh>
 
-      <points ref={dust} geometry={assets.dustGeom} material={assets.dustMat} />
+      {/* Partículas de poeira luminosa ao redor */}
+      <points ref={dustRef} geometry={dustGeom} material={dustMat} />
     </group>
   );
 }

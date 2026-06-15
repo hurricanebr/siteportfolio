@@ -6,21 +6,33 @@ import * as THREE from "three";
 import { RoomEnvironment } from "three/examples/jsm/environments/RoomEnvironment.js";
 
 /**
- * Environment map procedural (RoomEnvironment do three.js).
- * Sem ele, materiais metálicos não têm o que refletir e
- * renderizam escuros e "chapados".
+ * Environment map + tone mapping.
+ *
+ * - ACES Filmic: reproduz a curva de contraste das câmeras de cinema —
+ *   highlights não estouram e sombras ganham detalhe, essencial para GLBs com PBR.
+ * - environmentIntensity 1.8: deixa os reflexos metálicos bem visíveis
+ *   sem precisar de luzes extras.
  */
 export function SceneEnvironment() {
-  const gl = useThree((state) => state.gl);
-  const scene = useThree((state) => state.scene);
+  const gl    = useThree((s) => s.gl);
+  const scene = useThree((s) => s.scene);
 
   useEffect(() => {
-    const pmrem = new THREE.PMREMGenerator(gl);
-    const envMap = pmrem.fromScene(new RoomEnvironment(), 0.02).texture;
-    scene.environment = envMap;
-    scene.environmentIntensity = 0.9;
+    // Tone mapping fotorrealista (ACES Filmic é padrão na indústria de jogos/VFX)
+    gl.toneMapping         = THREE.ACESFilmicToneMapping;
+    gl.toneMappingExposure = 1.15;
+
+    const pmrem  = new THREE.PMREMGenerator(gl);
+    pmrem.compileEquirectangularShader();
+    const envMap = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
+
+    scene.environment          = envMap;
+    scene.environmentIntensity = 1.8;
+
     return () => {
-      scene.environment = null;
+      gl.toneMapping         = THREE.NoToneMapping;
+      gl.toneMappingExposure = 1.0;
+      scene.environment      = null;
       envMap.dispose();
       pmrem.dispose();
     };
