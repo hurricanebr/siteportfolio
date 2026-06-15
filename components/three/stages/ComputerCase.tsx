@@ -102,7 +102,7 @@ export function ComputerCase({ quality }: { quality: "high" | "low" }) {
     const loader   = new GLTFLoader();
 
     loader.load(
-      "/gabinete.glb",
+      "/office_pc.glb",
       (gltf) => {
         const root = gltf.scene;
         gltfSceneRef.current = root;
@@ -179,7 +179,7 @@ export function ComputerCase({ quality }: { quality: "high" | "low" }) {
         setGltfScene(root);
       },
       undefined,
-      (err) => console.warn("[ComputerCase] gabinete.glb:", err),
+      (err) => console.warn("[ComputerCase] office_pc.glb:", err),
     );
 
     return () => {
