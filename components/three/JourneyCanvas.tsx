@@ -7,7 +7,7 @@ import { measureJourney } from "@/lib/journey";
 import { CameraRig } from "./CameraRig";
 import { SceneEnvironment } from "./Environment";
 import { ChipCity } from "./stages/ChipCity";
-import { ComputerCase } from "./stages/ComputerCase";
+import { DatacenterStage } from "./stages/DatacenterStage";
 import { Galaxy } from "./stages/Galaxy";
 import { MicroParticles } from "./stages/MicroParticles";
 import { Motherboard } from "./stages/Motherboard";
@@ -53,7 +53,7 @@ export default function JourneyCanvas() {
       <pointLight position={[-3, -0.5, 0.5]} intensity={26} color="#2e6fff" />
 
       <CameraRig />
-      <ComputerCase quality={quality} />
+      <DatacenterStage quality={quality} />
       <Motherboard quality={quality} />
       <ChipCity quality={quality} />
       <MicroParticles quality={quality} />
